@@ -5,6 +5,8 @@ from math import inf
 from queue import PriorityQueue
 import networkx as nx
 from copy import deepcopy
+from pyproj import Transformer
+import numpy as np
 
 # Creating a graph of the chosen area
 def create_graph(place_name):
@@ -13,6 +15,8 @@ def create_graph(place_name):
     nodes = graph.nodes(data = True)
     plt.show()
     return graph
+
+wgs2jtsk = Transformer.from_crs(4326, 5514, always_xy= True)
 
 # Define speed limits based on the road type (in km/h)
 speed_limit = {
@@ -32,13 +36,17 @@ speed_limit = {
     }
 
 # Calculate travel time based on the distance and road type (speed limit)
-def calculate_travel_time(distance, road_type):
+def calculate_travel_time(distance, road_type, start_node, end_node):
+    start_node = wgs2jtsk.transform(start_node[0], start_node[1])
+    end_node = wgs2jtsk.transform(end_node[0], end_node[1])
+    euclidean_distance = np.linalg.norm(np.array(start_node)-np.array(end_node))
     if isinstance(road_type, list):
         road_type = tuple(road_type)
     speed = speed_limit.get(road_type, 30)
     if speed is None or speed == 0:
         return float('inf')                                # Avoid division by zero
-    travel_time = 3600 * (distance/1000)/speed
+    real_speed = (euclidean_distance/1000)/(distance/1000)*speed
+    travel_time = 3600 * (distance/1000)/real_speed
     return travel_time
 
 # Dijkstra + Bellman algorithm
@@ -189,9 +197,13 @@ def main():
     nodes_dict = nodes.to_dict()
     edges_dict = edges.to_dict()
 
+    C = {}
+    for x, (id, y) in zip(nodes_dict['x'].values(), nodes_dict['y'].items()):
+        C[id] = [x, y]
+    
     G = {}
     for highway, length, geometry in zip(edges_dict['highway'].values(), edges_dict['length'].values(), edges_dict['geometry'].keys()):
-        time = calculate_travel_time(length, highway)
+        time = calculate_travel_time(length, highway, C[geometry[0]], C[geometry[1]])
         if time == inf:
             continue
         if not geometry[1] in G:
@@ -201,9 +213,6 @@ def main():
             G[geometry[0]] = {}
         G[geometry[0]][geometry[1]] = [length, time] 
 
-    C = {}
-    for x, (id, y) in zip(nodes_dict['x'].values(), nodes_dict['y'].items()):
-        C[id] = [x, y]
     node_number = 1
     keys = deepcopy(list(C.keys()))
     for key in keys:
@@ -217,7 +226,7 @@ def main():
                 if key2 == key:
                     G[idx_inc][node_number] = G[idx_inc][key2]
                     del G[idx_inc][key2]
-        node_number += 1   
+        node_number += 1 
 
     start_node = 1
     end_node = 16   
@@ -229,32 +238,27 @@ def main():
     P_bf, D_bf = shortest_path_algorithm(G, start_node, 1, algorithm='bellman')
 
     shortest_path_graph, distance_shortest_path, time_shortest_path = reconstruct_path(P_s, G, start_node, end_node, 0)
+    bellman_path_graph, distance_bellman_path, time_bellman_path = reconstruct_path(P_bs, G, start_node, end_node, 0)
     fastest_path_graph, distance_fastest_path, time_fastest_path = reconstruct_path(P_f, G, start_node, end_node, 1)
-    
+    bellman_path_graph_fast, distance_bellman_path_fast, time_bellman_path_fast = reconstruct_path(P_bf, G, start_node, end_node, 1)
+
     visualize_graph(G, C, shortest_path_graph)
+    visualize_graph(G, C, bellman_path_graph)
+
     visualize_graph(G, C, fastest_path_graph)
-    
-    #Bellman-Ford
-    if P_s and P_f:
-        bellman_path_graph, distance_bellman_path, time_bellman_path = reconstruct_path(P_bs, G, start_node, end_node, 0)
-        bellman_path_graph_fast, distance_bellman_path_fast, time_bellman_path_fast = reconstruct_path(P_bf, G, start_node, end_node, 1)
-        
-        visualize_graph(G, C, bellman_path_graph)
-        visualize_graph(G, C, bellman_path_graph_fast)
+    visualize_graph(G, C, bellman_path_graph_fast)
  
     # Printing out the result for the distance between two nodes
     distance_matrix = shortest_distance(G)
     shortest_distance_1_to_16 = distance_matrix[start_node][end_node]
     print(f"The shortest distance between node {start_node} and node {end_node} is {round(shortest_distance_1_to_16/1000, 1)} kilometers.")
 
-    # Printing out results for the shortest and fastest path – Dijkstra
+    # Printing out results for the shortest and fastest path
     print(f"The shortest Path (Dijkstra) is {round((distance_shortest_path/1000), 2)} km long and takes {round((time_shortest_path/60), 2)} minutes")
     print(f"The Fastest Path (Dijkstra) is {round((distance_fastest_path/1000), 2)} km long and takes {round((time_fastest_path/60), 2)} minutes")
 
-    # Printing out results for the shortest and fastest path – Bellman-Ford
-    if P_s and P_f:
-        print(f"The shortest Path (Bellman) is {round((distance_bellman_path/1000), 2)} km long and takes {round((time_bellman_path/60), 2)} minutes")
-        print(f"The Fastest Path (Bellman) is {round((distance_bellman_path_fast/1000), 2)} km long and takes {round((time_bellman_path_fast/60), 2)} minutes")
+    print(f"The shortest Path (Bellman) is {round((distance_bellman_path/1000), 2)} km long and takes {round((time_bellman_path/60), 2)} minutes")
+    print(f"The Fastest Path (Bellman) is {round((distance_bellman_path_fast/1000), 2)} km long and takes {round((time_bellman_path_fast/60), 2)} minutes")
 
     # Minimum Spanning Tree
     V = list(G.keys())
@@ -264,5 +268,6 @@ def main():
             E.append([start_node, end_node, attributes[0]])
     wt, T = boruvka(V, E)
     visualize_minimum_spanning_tree(G, C, [edge[:2] for edge in T])
+    print(f"The weight of the Minimum Spanning Tree is {wt}")
 
 main()
